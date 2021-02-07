@@ -1,0 +1,143 @@
+- hosts: airflow
+  user: vagrant
+  become: yes
+  vars:
+    version:
+      airflow: 2.0.0
+      python: 3.6
+    mysql:
+      admin:
+        username: "root"
+        password: "59abBn2ynw"
+      db:
+        name: "airflow"
+      user:
+        username: "airflow-user"
+        password: "62D3F4737s"
+    airflow:
+      home: "/home/vagrant/airflow"
+  environment:
+    AIRFLOW_VERSION: "{{ version.airflow }}"
+    PYTHON_VERSION: "{{ version.python }}"
+  tasks:
+    - name: install module
+      apt:
+        name:
+          - build-essential
+        update_cache: yes
+    - name: install requirements
+      apt:
+        name:
+          - freetds-bin
+          - krb5-user
+          - ldap-utils
+          - libffi6
+          - libsasl2-2
+          - libsasl2-modules
+          - libssl1.1
+          - locales
+          - lsb-release
+          - sasl2-bin
+          - sqlite3
+          - unixodbc
+          - libmysqlclient-dev
+        install_recommends: false
+    - name: install pip
+      apt:
+        name: python3-pip
+    - name: install mysql
+      apt:
+        name:
+          - mysql-server
+          - python3-mysqldb
+    - name: set root user password
+      mysql_user:
+        login_user: "{{ mysql.admin.username }}"
+        login_password: "{{ mysql.admin.password }}"
+        name: "{{ mysql.admin.username }}"
+        password: "{{ mysql.admin.password }}"
+        check_implicit_admin: yes
+        state: present
+    - name: set default-character-set
+      lineinfile:
+        path: /etc/mysql/conf.d/mysql.cnf
+        insertafter: '\[mysqld\]'
+        line: 'default-character-set=utf8mb4'
+    - name: set character-set-server
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        insertafter: '\[mysqld\]'
+        line: "character-set-server=utf8mb4"
+    - name: set explicit_defaults_for_timestamp
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        insertafter: '\[mysqld\]'
+        line: 'explicit_defaults_for_timestamp = 1'
+    - name: restart mysql
+      service:
+        name: mysql
+        enabled: yes
+        state: restarted
+    - name: create database
+      mysql_db:
+        login_user: "{{ mysql.admin.username }}"
+        login_password: "{{ mysql.admin.password }}"
+        name: "{{ mysql.db.name }}"
+        state: present
+        encoding: utf8mb4
+    - name: create database user
+      mysql_user:
+        login_user: "{{ mysql.admin.username }}"
+        login_password: "{{ mysql.admin.password }}"
+        name: "{{ mysql.user.username }}"
+        password: "{{ mysql.user.password }}"
+        priv: "{{ mysql.db.name }}.*:ALL"
+        state: present
+    - name: install airflow
+      shell:
+        cmd: 'pip3 install apache-airflow=={{ version.airflow }} --constraint=${CONSTRAINT_URL}'
+      environment:
+        CONSTRAINT_URL: "https://raw.githubusercontent.com/apache/airflow/constraints-{{ version.airflow }}/constraints-{{ version.python }}.txt" 
+    - name: install airflow provider
+      pip:
+        name:
+          - apache-airflow-providers-ssh
+        executable: pip3
+    - name: initialize airflow
+      shell: 
+        cmd: 'airflow db init'
+    - name: wait initialization
+      stat:
+        path: "{{ airflow.home }}/airflow.cfg"
+      register: cfg
+      until: cfg.stat.exists
+      retries: 15
+      delay: 60
+    - name: use MySQL
+      lineinfile:
+        path: "{{ airflow.home }}/airflow.cfg"
+        regexp: ^sql_alchemy_conn
+        line: "sql_alchemy_conn = mysql://{{ mysql.user.username }}:{{ mysql.user.password }}@localhost:3306/{{ mysql.db.name }}"
+    - name: use LocalExecutor
+      lineinfile:
+        path: "{{ airflow.home }}/airflow.cfg"
+        regexp: ^executor
+        line: "executor = LocalExecutor"
+    - name: use LocalExecutor
+      lineinfile:
+        path: "{{ airflow.home }}/airflow.cfg"
+        regexp: ^load_examples
+        line: "load_examples = False"
+    - name: set charset for mysql
+      lineinfile:
+        path: "{{ airflow.home }}/airflow.cfg"
+        regex: ^sql_engine_collation_for_ids
+        insertafter: '# sql_engine_collation_for_ids'
+        line: 'sql_engine_collation_for_ids = utf8mb3_general_ci'        
+    - name: initialize database for airflow
+      shell: 
+        cmd: 'airflow db init'
+    - name: initialize airflow user
+      shell:
+        cmd: 'airflow users create -u admin -f firstname -l lastname -r Admin -e hoge@example.com -p Password'
+    
